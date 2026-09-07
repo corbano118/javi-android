@@ -26,7 +26,13 @@ class JaviWakeWordService : Service(), RecognitionListener {
         ApiClient.init(this)
         createChannel()
         startForeground(NOTIFICATION_ID, notification("Escuchando · di “Javi…”"))
-        tts = TextToSpeech(this) { result -> if (result == TextToSpeech.SUCCESS) tts?.language = Locale("es", "DO") }
+        tts = TextToSpeech(this) { result ->
+            if (result == TextToSpeech.SUCCESS) {
+                tts?.language = Locale("es", "DO")
+                tts?.setPitch(0.84f)
+                tts?.setSpeechRate(0.96f)
+            }
+        }
         recognizer = SpeechRecognizer.createSpeechRecognizer(this).also { it.setRecognitionListener(this) }
         restartListening(250)
     }
@@ -75,12 +81,16 @@ class JaviWakeWordService : Service(), RecognitionListener {
                 }
                 is JaviCommand.AskCore -> respond(ApiClient.sendMessage(listOf(ChatMessage("user", command.text))))
                 is JaviCommand.OpenApp -> {
-                    val ok = PhoneActions.openApp(this@JaviWakeWordService, command.packageName)
-                    respond(if (ok) "Abriendo ${command.spokenName}." else "No encontré ${command.spokenName} instalado.")
+                    val match = try { PhoneActions.openAppByName(this@JaviWakeWordService, command.appName) } catch (_: Exception) { null }
+                    respond(if (match != null) "Abriendo ${match.label}." else "No encontré ${command.appName} entre tus aplicaciones instaladas.")
                 }
                 is JaviCommand.SetAlarm -> {
-                    PhoneActions.setAlarm(this@JaviWakeWordService, command.hour, command.minute)
-                    respond("Preparando la alarma.")
+                    try {
+                        PhoneActions.setAlarm(this@JaviWakeWordService, command.hour, command.minute)
+                        respond("Preparando la alarma.")
+                    } catch (_: Exception) {
+                        respond("No pude abrir la aplicación de alarma.")
+                    }
                 }
             }
         }
