@@ -27,10 +27,10 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk JAVI-Assistant-v0.7.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk JAVI-Assistant-v0.8.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: JAVI-Assistant-v0.7
-          path: JAVI-Assistant-v0.7.apk
+          name: JAVI-Assistant-v0.8
+          path: JAVI-Assistant-v0.8.apk
           if-no-files-found: error
