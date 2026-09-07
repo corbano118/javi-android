@@ -43,6 +43,7 @@ class MainActivity : ComponentActivity(), RecognitionListener {
     private var heard by mutableStateOf("")
     private var listening by mutableStateOf(false)
     private var alwaysListening by mutableStateOf(false)
+    private var voiceEnabled by mutableStateOf(true)
     private var textInput by mutableStateOf("")
     private var showSettings by mutableStateOf(false)
     private var pcMac by mutableStateOf("")
@@ -66,8 +67,15 @@ class MainActivity : ComponentActivity(), RecognitionListener {
         pcMac = JaviConfig.pcMac(this)
         pcBroadcast = JaviConfig.pcBroadcast(this)
         alwaysListening = JaviConfig.wakeEnabled(this)
+        voiceEnabled = JaviConfig.voiceEnabled(this)
         recognizer = SpeechRecognizer.createSpeechRecognizer(this).also { it.setRecognitionListener(this) }
-        tts = TextToSpeech(this) { result -> if (result == TextToSpeech.SUCCESS) tts.language = Locale("es", "DO") }
+        tts = TextToSpeech(this) { result ->
+            if (result == TextToSpeech.SUCCESS) {
+                tts.language = Locale("es", "DO")
+                tts.setPitch(0.84f)
+                tts.setSpeechRate(0.96f)
+            }
+        }
         setContent { JaviScreen() }
         if (alwaysListening && hasMicPermission()) try { JaviWakeWordService.start(this) } catch (_: Exception) {}
         if (intent.getBooleanExtra("assistant_invocation", false)) startVoice()
@@ -124,9 +132,38 @@ class MainActivity : ComponentActivity(), RecognitionListener {
     }
 
     @Composable private fun SmallAction(label: String, modifier: Modifier, onClick: () -> Unit) { OutlinedButton(onClick = onClick, modifier = modifier.height(46.dp), contentPadding = PaddingValues(horizontal = 5.dp)) { Text(label, fontSize = 11.sp, maxLines = 1) } }
+
     @Composable private fun SettingsDialog() {
-        AlertDialog(onDismissRequest = { showSettings = false }, title = { Text("Configuración") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("La conexión con computadora queda guardada aquí para cuando la utilices.", color = Color.Gray, fontSize = 12.sp); OutlinedTextField(value = pcMac, onValueChange = { pcMac = it }, label = { Text("MAC de la computadora") }, singleLine = true); OutlinedTextField(value = pcBroadcast, onValueChange = { pcBroadcast = it }, label = { Text("Broadcast de red") }, singleLine = true) } }, confirmButton = { Button(onClick = { JaviConfig.savePc(this, pcMac, pcBroadcast); status = "CONFIGURACIÓN GUARDADA"; showSettings = false }) { Text("Guardar") } }, dismissButton = { TextButton(onClick = { showSettings = false }) { Text("Cerrar") } })
+        AlertDialog(
+            onDismissRequest = { showSettings = false },
+            title = { Text("Configuración") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Responder con voz", fontWeight = FontWeight.SemiBold)
+                            Text(if (voiceEnabled) "J.A.V.I. hablará al responder" else "Solo mostrará respuestas en pantalla", color = Color.Gray, fontSize = 12.sp)
+                        }
+                        Switch(
+                            checked = voiceEnabled,
+                            onCheckedChange = {
+                                voiceEnabled = it
+                                JaviConfig.setVoiceEnabled(this@MainActivity, it)
+                                if (!it) tts.stop()
+                            }
+                        )
+                    }
+                    HorizontalDivider()
+                    Text("La conexión con computadora queda guardada aquí para cuando la utilices.", color = Color.Gray, fontSize = 12.sp)
+                    OutlinedTextField(value = pcMac, onValueChange = { pcMac = it }, label = { Text("MAC de la computadora") }, singleLine = true)
+                    OutlinedTextField(value = pcBroadcast, onValueChange = { pcBroadcast = it }, label = { Text("Broadcast de red") }, singleLine = true)
+                }
+            },
+            confirmButton = { Button(onClick = { JaviConfig.savePc(this, pcMac, pcBroadcast); status = "CONFIGURACIÓN GUARDADA"; showSettings = false }) { Text("Guardar") } },
+            dismissButton = { TextButton(onClick = { showSettings = false }) { Text("Cerrar") } }
+        )
     }
+
     private fun sendTypedMessage() { val text = textInput.trim(); if (text.isBlank()) return; textInput = ""; process(text) }
     private fun hasMicPermission() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     private fun changeAlwaysListening(enabled: Boolean) { if (!enabled) { JaviWakeWordService.stop(this); alwaysListening = false; status = "LISTO"; return }; pendingBackgroundActivation = true; if (!hasMicPermission()) { micPermission.launch(Manifest.permission.RECORD_AUDIO); return }; continueBackgroundSetup() }
@@ -141,7 +178,19 @@ class MainActivity : ComponentActivity(), RecognitionListener {
     private suspend fun executeCommand(command: JaviCommand) { when (command) { JaviCommand.WakePc -> wakePc(); is JaviCommand.OpenApp -> { val ok = PhoneActions.openApp(this, command.packageName); speak(if (ok) "Abriendo ${command.spokenName}." else "No encontré ${command.spokenName} instalado.") }; is JaviCommand.SetAlarm -> { PhoneActions.setAlarm(this, command.hour, command.minute); speak("Preparando la alarma.") }; is JaviCommand.AskCore -> askCore(command.text) } }
     private suspend fun wakePc() { val mac = JaviConfig.pcMac(this); if (mac.isBlank()) { speak("Primero configura la dirección MAC de tu computadora."); return }; status = "ACTIVANDO PC"; val ok = WakeOnLan.send(mac, JaviConfig.pcBroadcast(this)); speak(if (ok) "Activando el computador." else "No pude enviar la señal al computador.") }
     private suspend fun askCore(command: String) { messages += ChatMessage("user", command); status = "PENSANDO"; val reply = ApiClient.sendMessage(messages.toList()); messages += ChatMessage("assistant", reply); speak(reply) }
-    private fun speak(text: String) { listening = false; status = "RESPONDIENDO"; try { recognizer.cancel() } catch (_: Exception) {}; tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "javi-reply"); status = "LISTO" }
+
+    private fun speak(text: String) {
+        listening = false
+        try { recognizer.cancel() } catch (_: Exception) {}
+        if (!voiceEnabled) {
+            status = "LISTO"
+            return
+        }
+        status = "RESPONDIENDO"
+        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "javi-reply")
+        status = "LISTO"
+    }
+
     override fun onResults(results: Bundle?) { listening = false; val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty(); heard = text; process(text) }
     override fun onPartialResults(partialResults: Bundle?) { heard = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty() }
     override fun onError(error: Int) { listening = false; status = if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) "NO TE ESCUCHÉ" else "ERROR DE VOZ $error" }
