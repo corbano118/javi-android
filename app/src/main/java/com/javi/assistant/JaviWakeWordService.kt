@@ -61,28 +61,35 @@ class JaviWakeWordService : Service(), RecognitionListener {
     private fun handlePhrase(text: String) {
         if (!CommandRouter.hasWakeWord(text)) { restartListening(250); return }
         val commandText = CommandRouter.removeWakeWord(text)
-        if (commandText.isBlank()) { speak("Te escucho"); return }
+        if (commandText.isBlank()) { respond("Te escucho"); return }
         busy = true
         scope.launch {
             when (val command = CommandRouter.route(commandText)) {
                 JaviCommand.WakePc -> {
                     val mac = JaviConfig.pcMac(this@JaviWakeWordService)
-                    if (mac.isBlank()) speak("Primero configura la dirección MAC de tu computadora en Javi.")
+                    if (mac.isBlank()) respond("Primero configura la dirección MAC de tu computadora en Javi.")
                     else {
                         val ok = WakeOnLan.send(mac, JaviConfig.pcBroadcast(this@JaviWakeWordService))
-                        speak(if (ok) "Activando el computador." else "No pude enviar la señal al computador.")
+                        respond(if (ok) "Activando el computador." else "No pude enviar la señal al computador.")
                     }
                 }
-                is JaviCommand.AskCore -> speak(ApiClient.sendMessage(listOf(ChatMessage("user", command.text))))
+                is JaviCommand.AskCore -> respond(ApiClient.sendMessage(listOf(ChatMessage("user", command.text))))
                 is JaviCommand.OpenApp -> {
                     val ok = PhoneActions.openApp(this@JaviWakeWordService, command.packageName)
-                    speak(if (ok) "Abriendo ${command.spokenName}." else "No encontré ${command.spokenName} instalado.")
+                    respond(if (ok) "Abriendo ${command.spokenName}." else "No encontré ${command.spokenName} instalado.")
                 }
                 is JaviCommand.SetAlarm -> {
                     PhoneActions.setAlarm(this@JaviWakeWordService, command.hour, command.minute)
-                    speak("Preparando la alarma.")
+                    respond("Preparando la alarma.")
                 }
             }
+        }
+    }
+
+    private fun respond(text: String) {
+        if (JaviConfig.voiceEnabled(this)) speak(text) else {
+            busy = false
+            restartListening(350)
         }
     }
 
