@@ -19,6 +19,8 @@
     <application
         android:theme="@style/Theme.JAVI"
         android:label="J.A.V.I."
+        android:icon="@drawable/ic_javi_launcher"
+        android:roundIcon="@drawable/ic_javi_launcher"
         android:usesCleartextTraffic="false"
         android:allowBackup="true"
         android:supportsRtl="true">
