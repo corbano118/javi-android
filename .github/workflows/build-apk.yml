@@ -1,4 +1,4 @@
-name: Build JAVI APK
+name: Build JAVI Android
 
 on:
   workflow_dispatch:
@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,18 +21,20 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.13'
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk JAVI-Assistant-v0.8.apk
-      - name: Upload APK
+      - name: Validate release bundle
+        run: gradle bundleRelease --stacktrace
+      - name: Rename debug APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk JAVI-Assistant-v0.9-debug.apk
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: JAVI-Assistant-v0.8
-          path: JAVI-Assistant-v0.8.apk
+          name: JAVI-Assistant-v0.9-debug
+          path: JAVI-Assistant-v0.9-debug.apk
           if-no-files-found: error
