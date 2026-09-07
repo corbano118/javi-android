@@ -12,7 +12,7 @@ object JaviConfig {
     fun pcMac(context: Context): String = prefs(context).getString(PC_MAC, "") ?: ""
     fun pcBroadcast(context: Context): String = prefs(context).getString(PC_BROADCAST, "255.255.255.255") ?: "255.255.255.255"
     fun wakeEnabled(context: Context): Boolean = prefs(context).getBoolean(WAKE_ENABLED, false)
-    fun voiceEnabled(context: Context): Boolean = prefs(context).getBoolean(VOICE_ENABLED, true)
+    fun voiceEnabled(context: Context): Boolean = prefs(context).getBoolean(VOICE_ENABLED, false)
 
     fun savePc(context: Context, mac: String, broadcast: String) {
         prefs(context).edit()
