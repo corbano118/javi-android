@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.JAVI" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#070B10</item>
+        <item name="android:navigationBarColor">#070B10</item>
+    </style>
+</resources>
