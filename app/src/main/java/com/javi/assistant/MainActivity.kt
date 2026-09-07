@@ -140,18 +140,8 @@ class MainActivity : ComponentActivity(), RecognitionListener {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Responder con voz", fontWeight = FontWeight.SemiBold)
-                            Text(if (voiceEnabled) "J.A.V.I. hablará al responder" else "Solo mostrará respuestas en pantalla", color = Color.Gray, fontSize = 12.sp)
-                        }
-                        Switch(
-                            checked = voiceEnabled,
-                            onCheckedChange = {
-                                voiceEnabled = it
-                                JaviConfig.setVoiceEnabled(this@MainActivity, it)
-                                if (!it) tts.stop()
-                            }
-                        )
+                        Column(Modifier.weight(1f)) { Text("Responder con voz", fontWeight = FontWeight.SemiBold); Text(if (voiceEnabled) "J.A.V.I. hablará al responder" else "Solo mostrará respuestas en pantalla", color = Color.Gray, fontSize = 12.sp) }
+                        Switch(checked = voiceEnabled, onCheckedChange = { voiceEnabled = it; JaviConfig.setVoiceEnabled(this@MainActivity, it); if (!it) tts.stop() })
                     }
                     HorizontalDivider()
                     Text("La conexión con computadora queda guardada aquí para cuando la utilices.", color = Color.Gray, fontSize = 12.sp)
@@ -175,17 +165,30 @@ class MainActivity : ComponentActivity(), RecognitionListener {
     private fun startVoice() { if (hasMicPermission()) listen() else micPermission.launch(Manifest.permission.RECORD_AUDIO) }
     private fun listen() { listening = true; status = "ESCUCHANDO"; try { recognizer.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply { putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM); putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-DO"); putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true) }) } catch (_: Exception) { listening = false; status = "NO PUDE INICIAR EL MICRÓFONO" } }
     private fun process(text: String) { val raw = text.trim(); if (raw.isBlank()) return; val commandText = CommandRouter.removeWakeWord(raw); if (commandText.isBlank()) { speak("Te escucho."); return }; lifecycleScope.launch { executeCommand(CommandRouter.route(commandText)) } }
-    private suspend fun executeCommand(command: JaviCommand) { when (command) { JaviCommand.WakePc -> wakePc(); is JaviCommand.OpenApp -> { val ok = PhoneActions.openApp(this, command.packageName); speak(if (ok) "Abriendo ${command.spokenName}." else "No encontré ${command.spokenName} instalado.") }; is JaviCommand.SetAlarm -> { PhoneActions.setAlarm(this, command.hour, command.minute); speak("Preparando la alarma.") }; is JaviCommand.AskCore -> askCore(command.text) } }
+
+    private suspend fun executeCommand(command: JaviCommand) {
+        when (command) {
+            JaviCommand.WakePc -> wakePc()
+            is JaviCommand.OpenApp -> {
+                status = "ABRIENDO APP"
+                val match = try { PhoneActions.openAppByName(this, command.appName) } catch (_: Exception) { null }
+                speak(if (match != null) "Abriendo ${match.label}." else "No encontré ${command.appName} entre tus aplicaciones instaladas.")
+            }
+            is JaviCommand.SetAlarm -> {
+                try { PhoneActions.setAlarm(this, command.hour, command.minute); speak("Preparando la alarma.") }
+                catch (_: Exception) { speak("No pude abrir la aplicación de alarma.") }
+            }
+            is JaviCommand.AskCore -> askCore(command.text)
+        }
+    }
+
     private suspend fun wakePc() { val mac = JaviConfig.pcMac(this); if (mac.isBlank()) { speak("Primero configura la dirección MAC de tu computadora."); return }; status = "ACTIVANDO PC"; val ok = WakeOnLan.send(mac, JaviConfig.pcBroadcast(this)); speak(if (ok) "Activando el computador." else "No pude enviar la señal al computador.") }
     private suspend fun askCore(command: String) { messages += ChatMessage("user", command); status = "PENSANDO"; val reply = ApiClient.sendMessage(messages.toList()); messages += ChatMessage("assistant", reply); speak(reply) }
 
     private fun speak(text: String) {
         listening = false
         try { recognizer.cancel() } catch (_: Exception) {}
-        if (!voiceEnabled) {
-            status = "LISTO"
-            return
-        }
+        if (!voiceEnabled) { status = "LISTO"; return }
         status = "RESPONDIENDO"
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "javi-reply")
         status = "LISTO"
