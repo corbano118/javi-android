@@ -1,12 +1,16 @@
 package com.javi.assistant
 
+import android.app.Activity
 import android.content.Context
 import android.net.Uri
 
 data class ChatMessage(val role: String, val content: String)
 
 object ApiClient {
-    fun init(context: Context) = CoreWebBridge.init(context)
+    fun init(context: Context) {
+        CoreWebBridge.init(context)
+        if (context is Activity) BrowserPostBridge.init(context)
+    }
 
     suspend fun sendMessage(history: List<ChatMessage>, imageUri: Uri? = null): String {
         if (history.none { it.role == "user" && it.content.isNotBlank() } && imageUri == null) return "No recibí ningún mensaje."
