@@ -36,7 +36,7 @@ object ChatStore {
                     msgs += UiMessage(
                         role = m.optString("role", "assistant"),
                         content = m.optString("content", ""),
-                        imageBase64 = m.optString("imageBase64").takeIf { it.isNotBlank() }
+                        imageBase64 = null
                     )
                 }
                 result += StoredConversation(
@@ -54,7 +54,7 @@ object ChatStore {
     fun save(context: Context, conversation: StoredConversation) {
         val all = load(context).toMutableList()
         all.removeAll { it.id == conversation.id }
-        all.add(conversation)
+        all.add(conversation.copy(messages = conversation.messages.map { it.copy(imageBase64 = null) }))
         saveAll(context, all.sortedByDescending { it.updatedAt })
     }
 
@@ -70,7 +70,6 @@ object ChatStore {
                 ma.put(JSONObject().apply {
                     put("role", m.role)
                     put("content", m.content)
-                    if (!m.imageBase64.isNullOrBlank()) put("imageBase64", m.imageBase64)
                 })
             }
             arr.put(JSONObject().apply {
