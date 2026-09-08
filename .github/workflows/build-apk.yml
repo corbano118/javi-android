@@ -22,6 +22,13 @@ jobs:
         uses: android-actions/setup-android@v3
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install offline Spanish wake-word model
+        run: |
+          rm -rf app/src/main/assets/model-es app/src/main/assets/vosk-model-small-es-0.42
+          mkdir -p app/src/main/assets
+          curl -fL --retry 3 https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip -o /tmp/vosk-es.zip
+          unzip -q /tmp/vosk-es.zip -d app/src/main/assets
+          mv app/src/main/assets/vosk-model-small-es-0.42 app/src/main/assets/model-es
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -31,10 +38,10 @@ jobs:
       - name: Validate release bundle
         run: gradle bundleRelease --stacktrace
       - name: Rename debug APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk JAVI-Assistant-v0.12-system-assistant.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk JAVI-Assistant-v0.13-local-wake.apk
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: JAVI-Assistant-v0.12-system-assistant
-          path: JAVI-Assistant-v0.12-system-assistant.apk
+          name: JAVI-Assistant-v0.13-local-wake
+          path: JAVI-Assistant-v0.13-local-wake.apk
           if-no-files-found: error
