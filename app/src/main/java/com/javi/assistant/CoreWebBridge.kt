@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
@@ -14,7 +15,6 @@ import java.net.URLEncoder
 object CoreWebBridge {
     private const val CORE_ORIGIN = "https://j-a-v-i-45ursb.v2.appdeploy.ai"
     private const val ANDROID_CHAT_URL = "$CORE_ORIGIN/api/android-chat"
-    private const val IMAGE_URL = "$CORE_ORIGIN/api/image"
     @Volatile private var appContext: Context? = null
 
     data class ImageResult(val reply: String, val base64: String, val mimeType: String)
@@ -23,26 +23,39 @@ object CoreWebBridge {
         appContext = context.applicationContext
     }
 
-    suspend fun sendMessage(history: List<ChatMessage>, imageUri: Uri? = null): String = withContext(Dispatchers.IO) {
-        if (imageUri != null) {
-            throw IllegalStateException("El análisis de fotos está migrándose al nuevo transporte. El chat de texto ya puede funcionar normalmente.")
+    suspend fun sendMessage(history: List<ChatMessage>, imageUri: Uri? = null): String {
+        if (imageUri == null) return withContext(Dispatchers.IO) {
+            val contextText = history.takeLast(12).joinToString("\n") { message ->
+                if (message.role == "assistant") "J.A.V.I.: ${message.content}" else "Usuario: ${message.content}"
+            }
+            val body = getJson(ANDROID_CHAT_URL, contextText)
+            JSONObject(body).optString("reply").ifBlank { "No obtuve respuesta." }
         }
-        val contextText = history.takeLast(12).joinToString("\n") { message ->
-            if (message.role == "assistant") "J.A.V.I.: ${message.content}" else "Usuario: ${message.content}"
+        val payload = JSONObject().apply {
+            put("messages", JSONArray().apply {
+                history.takeLast(12).forEach { message ->
+                    put(JSONObject().apply { put("role", message.role); put("content", message.content) })
+                }
+            })
+            put("image", imageJson(imageUri))
         }
-        val body = getJson(ANDROID_CHAT_URL, contextText)
-        JSONObject(body).optString("reply").ifBlank { "No obtuve respuesta." }
+        val body = BrowserPostBridge.postJson("/api/chat", payload, 120_000)
+        return JSONObject(body).optString("reply").ifBlank { "No obtuve respuesta." }
     }
 
-    suspend fun generateImage(prompt: String, imageUri: Uri? = null): ImageResult = withContext(Dispatchers.IO) {
+    suspend fun generateImage(prompt: String, imageUri: Uri? = null): ImageResult {
+        if (imageUri == null) {
+            val result = MediaClient.generateImage(prompt)
+            return ImageResult(result.reply, result.base64, result.mimeType)
+        }
         val payload = JSONObject().apply {
             put("prompt", prompt.trim())
-            imageUri?.let { put("image", imageJson(it)) }
+            put("image", imageJson(imageUri))
         }
-        val body = postJson(IMAGE_URL, payload)
+        val body = BrowserPostBridge.postJson("/api/image", payload, 180_000)
         val json = JSONObject(body)
         val image = json.optJSONObject("image") ?: throw IllegalStateException("J.A.V.I. no devolvió una imagen.")
-        ImageResult(
+        return ImageResult(
             reply = json.optString("reply").ifBlank { "Listo." },
             base64 = image.optString("data"),
             mimeType = image.optString("mimeType").ifBlank { "image/png" }
@@ -84,25 +97,8 @@ object CoreWebBridge {
             doInput = true
             useCaches = false
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "JAVI-Android/0.15")
+            setRequestProperty("User-Agent", "JAVI-Android/0.16")
         }
-        return readResponse(connection)
-    }
-
-    private fun postJson(endpoint: String, payload: JSONObject): String {
-        val bytes = payload.toString().toByteArray(Charsets.UTF_8)
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20_000
-            readTimeout = 90_000
-            doInput = true
-            doOutput = true
-            useCaches = false
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Accept", "application/json")
-            setFixedLengthStreamingMode(bytes.size)
-        }
-        connection.outputStream.use { it.write(bytes) }
         return readResponse(connection)
     }
 
