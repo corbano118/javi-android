@@ -5,15 +5,15 @@ import android.net.Uri
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 object CoreWebBridge {
     private const val CORE_ORIGIN = "https://j-a-v-i-45ursb.v2.appdeploy.ai"
-    private const val CHAT_URL = "$CORE_ORIGIN/api/chat"
+    private const val ANDROID_CHAT_URL = "$CORE_ORIGIN/api/android-chat"
     private const val IMAGE_URL = "$CORE_ORIGIN/api/image"
     @Volatile private var appContext: Context? = null
 
@@ -24,18 +24,13 @@ object CoreWebBridge {
     }
 
     suspend fun sendMessage(history: List<ChatMessage>, imageUri: Uri? = null): String = withContext(Dispatchers.IO) {
-        val payload = JSONObject().apply {
-            put("messages", JSONArray().apply {
-                history.forEach { message ->
-                    put(JSONObject().apply {
-                        put("role", message.role)
-                        put("content", message.content)
-                    })
-                }
-            })
-            imageUri?.let { put("image", imageJson(it)) }
+        if (imageUri != null) {
+            throw IllegalStateException("El análisis de fotos está migrándose al nuevo transporte. El chat de texto ya puede funcionar normalmente.")
         }
-        val body = postJson(CHAT_URL, payload)
+        val contextText = history.takeLast(12).joinToString("\n") { message ->
+            if (message.role == "assistant") "J.A.V.I.: ${message.content}" else "Usuario: ${message.content}"
+        }
+        val body = getJson(ANDROID_CHAT_URL, contextText)
         JSONObject(body).optString("reply").ifBlank { "No obtuve respuesta." }
     }
 
@@ -69,9 +64,7 @@ object CoreWebBridge {
                 val read = input.read(buffer)
                 if (read <= 0) break
                 total += read
-                if (total > 6 * 1024 * 1024) {
-                    throw IllegalArgumentException("La imagen supera el límite de 6 MB. Elige una imagen más pequeña.")
-                }
+                if (total > 6 * 1024 * 1024) throw IllegalArgumentException("La imagen supera el límite de 6 MB.")
                 out.write(buffer, 0, read)
             }
             out.toByteArray()
@@ -82,6 +75,20 @@ object CoreWebBridge {
         }
     }
 
+    private fun getJson(endpoint: String, message: String): String {
+        val encoded = URLEncoder.encode(message, "UTF-8")
+        val connection = (URL("$endpoint?q=$encoded").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 20_000
+            readTimeout = 90_000
+            doInput = true
+            useCaches = false
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "JAVI-Android/0.15")
+        }
+        return readResponse(connection)
+    }
+
     private fun postJson(endpoint: String, payload: JSONObject): String {
         val bytes = payload.toString().toByteArray(Charsets.UTF_8)
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
@@ -90,53 +97,28 @@ object CoreWebBridge {
             readTimeout = 90_000
             doInput = true
             doOutput = true
-            instanceFollowRedirects = true
             useCaches = false
-
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Accept", "application/json, text/plain, */*")
-            setRequestProperty("Accept-Language", "es-DO,es;q=0.9,en;q=0.8")
-            setRequestProperty("Origin", CORE_ORIGIN)
-            setRequestProperty("Referer", "$CORE_ORIGIN/")
-            setRequestProperty(
-                "User-Agent",
-                "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36 JAVI/0.15"
-            )
-            setRequestProperty("X-Requested-With", "com.javi.assistant")
+            setRequestProperty("Accept", "application/json")
             setFixedLengthStreamingMode(bytes.size)
         }
+        connection.outputStream.use { it.write(bytes) }
+        return readResponse(connection)
+    }
 
+    private fun readResponse(connection: HttpURLConnection): String {
         return try {
-            connection.outputStream.use { output ->
-                output.write(bytes)
-                output.flush()
-            }
-
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-
             if (code !in 200..299) {
-                val jsonDetail = runCatching {
-                    val json = JSONObject(body)
-                    json.optString("error").ifBlank { json.optString("message") }
-                }.getOrDefault("")
-
-                val plainDetail = body
-                    .replace(Regex("<[^>]+>"), " ")
-                    .replace(Regex("\\s+"), " ")
-                    .trim()
-                    .take(220)
-
-                val detail = when {
-                    jsonDetail.isNotBlank() -> jsonDetail
-                    plainDetail.isNotBlank() -> plainDetail
-                    else -> "Error HTTP $code"
+                val detail = runCatching {
+                    JSONObject(body).optString("error").ifBlank { JSONObject(body).optString("message") }
+                }.getOrDefault("").ifBlank {
+                    body.replace(Regex("<[^>]+>"), " ").replace(Regex("\\s+"), " ").trim().take(220)
                 }
-
-                throw IllegalStateException("J.A.V.I. Core respondió $code: $detail")
+                throw IllegalStateException("J.A.V.I. Core respondió $code: ${detail.ifBlank { "Error HTTP" }}")
             }
-
             if (body.isBlank()) throw IllegalStateException("J.A.V.I. Core respondió vacío.")
             body
         } finally {
