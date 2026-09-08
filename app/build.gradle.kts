@@ -12,8 +12,8 @@ android {
         applicationId = "com.javi.assistant"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.14.0"
+        versionCode = 15
+        versionName = "0.15.0"
     }
 
     compileOptions {
@@ -44,6 +44,4 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview:1.8.3")
     debugImplementation("androidx.compose.ui:ui-tooling:1.8.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    implementation("com.alphacephei:vosk-android:0.3.75@aar")
-    implementation("net.java.dev.jna:jna:5.18.1@aar")
 }
