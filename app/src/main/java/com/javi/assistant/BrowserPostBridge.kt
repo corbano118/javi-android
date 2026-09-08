@@ -39,27 +39,33 @@ object BrowserPostBridge {
         }
     }
 
-    suspend fun postJson(path: String, payload: JSONObject, timeoutMs: Long = 120_000): String {
+    suspend fun getJson(path: String, timeoutMs: Long = 120_000): String = request("GET", path, null, timeoutMs)
+
+    suspend fun postJson(path: String, payload: JSONObject, timeoutMs: Long = 120_000): String =
+        request("POST", path, payload, timeoutMs)
+
+    private suspend fun request(method: String, path: String, payload: JSONObject?, timeoutMs: Long): String {
         withTimeout(30_000) { ready.await() }
         val id = UUID.randomUUID().toString()
         val deferred = CompletableDeferred<String>()
         pending[id] = deferred
+        val safeMethod = JSONObject.quote(method)
         val safePath = JSONObject.quote(path)
-        val safePayload = payload.toString()
+        val safePayload = JSONObject.quote(payload?.toString().orEmpty())
         val safeId = JSONObject.quote(id)
         val script = """
             (async function(){
               try {
-                const response=await fetch($safePath,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify($safePayload)});
-                const body=await response.text();
-                JaviNative.onResult($safeId,String(response.status),body);
+                for(let i=0;i<100 && typeof window.JaviApiBridge!=='function';i++) await new Promise(r=>setTimeout(r,100));
+                if(typeof window.JaviApiBridge!=='function') throw new Error('Puente J.A.V.I. no disponible');
+                await window.JaviApiBridge($safeId,$safeMethod,$safePath,$safePayload);
               } catch(e) {
                 JaviNative.onResult($safeId,'0',String(e));
               }
             })();
         """.trimIndent()
         withContext(Dispatchers.Main) {
-            webView?.evaluateJavascript(script, null) ?: throw IllegalStateException("El puente multimedia no está inicializado")
+            webView?.evaluateJavascript(script, null) ?: throw IllegalStateException("El puente J.A.V.I. no está inicializado")
         }
         return try {
             withTimeout(timeoutMs) { deferred.await() }
