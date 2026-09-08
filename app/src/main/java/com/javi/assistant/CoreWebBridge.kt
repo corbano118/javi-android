@@ -12,8 +12,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 object CoreWebBridge {
-    private const val CHAT_URL = "https://j-a-v-i-45ursb.v2.appdeploy.ai/api/chat"
-    private const val IMAGE_URL = "https://j-a-v-i-45ursb.v2.appdeploy.ai/api/image"
+    private const val CORE_ORIGIN = "https://j-a-v-i-45ursb.v2.appdeploy.ai"
+    private const val CHAT_URL = "$CORE_ORIGIN/api/chat"
+    private const val IMAGE_URL = "$CORE_ORIGIN/api/image"
     @Volatile private var appContext: Context? = null
 
     data class ImageResult(val reply: String, val base64: String, val mimeType: String)
@@ -82,23 +83,61 @@ object CoreWebBridge {
     }
 
     private fun postJson(endpoint: String, payload: JSONObject): String {
+        val bytes = payload.toString().toByteArray(Charsets.UTF_8)
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 20_000
             readTimeout = 90_000
+            doInput = true
             doOutput = true
+            instanceFollowRedirects = true
+            useCaches = false
+
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Accept", "application/json, text/plain, */*")
+            setRequestProperty("Accept-Language", "es-DO,es;q=0.9,en;q=0.8")
+            setRequestProperty("Origin", CORE_ORIGIN)
+            setRequestProperty("Referer", "$CORE_ORIGIN/")
+            setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36 JAVI/0.15"
+            )
+            setRequestProperty("X-Requested-With", "com.javi.assistant")
+            setFixedLengthStreamingMode(bytes.size)
         }
+
         return try {
-            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+            connection.outputStream.use { output ->
+                output.write(bytes)
+                output.flush()
+            }
+
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+
             if (code !in 200..299) {
-                val detail = runCatching { JSONObject(body).optString("error") }.getOrNull().orEmpty()
-                throw IllegalStateException(if (detail.isNotBlank()) detail else "Error $code comunicando con J.A.V.I. Core")
+                val jsonDetail = runCatching {
+                    val json = JSONObject(body)
+                    json.optString("error").ifBlank { json.optString("message") }
+                }.getOrDefault("")
+
+                val plainDetail = body
+                    .replace(Regex("<[^>]+>"), " ")
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+                    .take(220)
+
+                val detail = when {
+                    jsonDetail.isNotBlank() -> jsonDetail
+                    plainDetail.isNotBlank() -> plainDetail
+                    else -> "Error HTTP $code"
+                }
+
+                throw IllegalStateException("J.A.V.I. Core respondió $code: $detail")
             }
+
+            if (body.isBlank()) throw IllegalStateException("J.A.V.I. Core respondió vacío.")
             body
         } finally {
             connection.disconnect()
