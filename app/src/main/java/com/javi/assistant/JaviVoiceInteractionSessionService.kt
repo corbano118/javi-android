@@ -8,13 +8,19 @@ class JaviVoiceInteractionSessionService : VoiceInteractionSessionService() {
     override fun onNewSession(args: Bundle?): VoiceInteractionSession = JaviVoiceInteractionSession(this)
 }
 
+/**
+ * Sesión deliberadamente ligera. Invocar al asistente del sistema no debe
+ * lanzar MainActivity: JAVI ya escucha y ejecuta las órdenes desde su servicio.
+ * Esto evita que el usuario tenga que volver a la APK o tocar la J.
+ */
 class JaviVoiceInteractionSession(context: android.content.Context) : VoiceInteractionSession(context) {
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
-        val i = android.content.Intent(context, MainActivity::class.java).apply {
-            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            putExtra("assistant_invocation", true)
+        try {
+            JaviConfig.setWakeEnabled(context, true)
+            JaviWakeWordService.start(context)
+        } catch (_: Exception) {
         }
-        context.startActivity(i); hide()
+        hide()
     }
 }
