@@ -12,8 +12,8 @@ android {
         applicationId = "com.javi.assistant"
         minSdk = 26
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.11.0"
+        versionCode = 12
+        versionName = "0.12.0"
     }
 
     compileOptions {
