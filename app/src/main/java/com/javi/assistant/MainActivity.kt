@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.speech.RecognitionListener
@@ -88,6 +89,14 @@ class MainActivity : ComponentActivity(), RecognitionListener {
     private var section by mutableStateOf(JaviSection.CHAT)
     private var drawerOpen by mutableStateOf(false)
     private var studioImageBase64 by mutableStateOf<String?>(null)
+    private var videoSeconds by mutableStateOf(30)
+    private var musicSeconds by mutableStateOf(120)
+    private var avatarPreset by mutableStateOf("human-resource")
+    private var avatarVoice by mutableStateOf("clara")
+    private var mediaProgress by mutableStateOf(0)
+    private var lastMediaUri by mutableStateOf<Uri?>(null)
+    private var lastMediaMime by mutableStateOf<String?>(null)
+    private var lastMediaLabel by mutableStateOf<String?>(null)
 
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         if (it) listen() else status = "Necesito permiso de micrófono"
@@ -145,6 +154,19 @@ class MainActivity : ComponentActivity(), RecognitionListener {
         status = "Listo"
     }
 
+    private fun openSection(next: JaviSection) {
+        section = next
+        drawerOpen = false
+        textInput = ""
+        selectedImageUri = null
+        selectedImageName = null
+        mediaProgress = 0
+        lastMediaUri = null
+        lastMediaMime = null
+        lastMediaLabel = null
+        status = "Listo"
+    }
+
     @Composable
     private fun JaviApp() {
         val bg = Color(0xFF101216)
@@ -157,26 +179,10 @@ class MainActivity : ComponentActivity(), RecognitionListener {
                     Box(Modifier.fillMaxWidth().weight(1f)) {
                         when (section) {
                             JaviSection.CHAT -> ChatScreen()
-                            JaviSection.IMAGES -> StudioScreen(
-                                "Imágenes",
-                                "Crea imágenes o adjunta una foto para editarla.",
-                                "Ej.: crea un diagrama del sistema solar"
-                            )
-                            JaviSection.VIDEOS -> StudioScreen(
-                                "Videos · hasta 1:30",
-                                "Describe el video que deseas generar.",
-                                "Ej.: video educativo de 60 segundos sobre células"
-                            )
-                            JaviSection.MUSIC -> StudioScreen(
-                                "Música · hasta 4:00",
-                                "Describe género, ambiente, instrumentos y letra si la deseas.",
-                                "Ej.: canción lo-fi de estudio de 4 minutos"
-                            )
-                            JaviSection.AVATARS -> StudioScreen(
-                                "Avatares",
-                                "Describe tu avatar y la voz que quieres.",
-                                "Ej.: profesor virtual joven, voz masculina"
-                            )
+                            JaviSection.IMAGES -> ImageStudio()
+                            JaviSection.VIDEOS -> VideoStudio()
+                            JaviSection.MUSIC -> MusicStudio()
+                            JaviSection.AVATARS -> AvatarStudio()
                             JaviSection.TASKS -> TasksScreen()
                         }
                     }
@@ -196,7 +202,7 @@ class MainActivity : ComponentActivity(), RecognitionListener {
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text("J.A.V.I.", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 19.sp)
-                Text(if (thinking) "Pensando…" else status, color = Color(0xFF979DA8), fontSize = 12.sp)
+                Text(if (thinking) status else status, color = Color(0xFF979DA8), fontSize = 12.sp, maxLines = 1)
             }
             TextButton(onClick = {
                 voiceEnabled = !voiceEnabled
@@ -218,12 +224,12 @@ class MainActivity : ComponentActivity(), RecognitionListener {
                 }
                 Spacer(Modifier.height(18.dp))
                 Menu("＋", "Nuevo chat") { newChat() }
-                Menu("💬", "Chats") { section = JaviSection.CHAT; drawerOpen = false }
-                Menu("▧", "Imágenes") { section = JaviSection.IMAGES; drawerOpen = false }
-                Menu("▶", "Videos") { section = JaviSection.VIDEOS; drawerOpen = false }
-                Menu("♫", "Música") { section = JaviSection.MUSIC; drawerOpen = false }
-                Menu("◉", "Avatares") { section = JaviSection.AVATARS; drawerOpen = false }
-                Menu("✓", "Tareas") { section = JaviSection.TASKS; drawerOpen = false }
+                Menu("💬", "Chats") { openSection(JaviSection.CHAT) }
+                Menu("▧", "Imágenes") { openSection(JaviSection.IMAGES) }
+                Menu("▶", "Videos") { openSection(JaviSection.VIDEOS) }
+                Menu("♫", "Música") { openSection(JaviSection.MUSIC) }
+                Menu("◉", "Avatares") { openSection(JaviSection.AVATARS) }
+                Menu("✓", "Tareas") { openSection(JaviSection.TASKS) }
                 Spacer(Modifier.height(18.dp))
                 Text("Historial", color = Color.LightGray, fontSize = 14.sp)
                 Spacer(Modifier.height(8.dp))
@@ -239,12 +245,7 @@ class MainActivity : ComponentActivity(), RecognitionListener {
                     }
                 }
                 HorizontalDivider(color = Color.White.copy(alpha = .1f))
-                Text(
-                    "Los chats se eliminan automáticamente después de 60 días.",
-                    color = Color(0xFF9CA2AA),
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 14.dp)
-                )
+                Text("Los chats se eliminan automáticamente después de 60 días.", color = Color(0xFF9CA2AA), fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp))
                 Text("J.A.V.I. · IA para estudios", color = accent, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
             }
         }
@@ -277,63 +278,122 @@ class MainActivity : ComponentActivity(), RecognitionListener {
                     Modifier.fillMaxWidth().weight(1f).padding(horizontal = 14.dp),
                     contentPadding = PaddingValues(vertical = 14.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    itemsIndexed(messages) { _, message -> Bubble(message) }
-                }
+                ) { itemsIndexed(messages) { _, message -> Bubble(message) } }
             }
             Composer()
         }
     }
 
     @Composable
-    private fun StudioScreen(title: String, description: String, hint: String) {
-        Column(Modifier.fillMaxSize().padding(22.dp)) {
-            Text(title, color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Text(description, color = Color(0xFFA7ADB6), fontSize = 15.sp)
-            if (section == JaviSection.VIDEOS || section == JaviSection.MUSIC || section == JaviSection.AVATARS) {
-                Spacer(Modifier.height(18.dp))
-                Surface(color = Color(0xFF1B2025), shape = RoundedCornerShape(16.dp)) {
-                    Text(
-                        "La interfaz ya está preparada para devolver archivos reales. El proveedor multimedia debe conectarse en el backend antes de habilitar la generación.",
-                        color = Color(0xFFBFC5CC),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(14.dp)
-                    )
+    private fun StudioHeader(title: String, description: String) {
+        Text(title, color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(description, color = Color(0xFFA7ADB6), fontSize = 15.sp)
+        if (thinking && mediaProgress > 0) {
+            Spacer(Modifier.height(12.dp))
+            Text("Progreso: $mediaProgress%", color = Color(0xFF72E3D1), fontSize = 14.sp)
+        }
+        lastMediaLabel?.let { label ->
+            Spacer(Modifier.height(14.dp))
+            Surface(color = Color(0xFF1B2025), shape = RoundedCornerShape(16.dp)) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("✓ $label", color = Color(0xFF72E3D1), fontWeight = FontWeight.SemiBold)
+                    Text("Guardado en tu dispositivo.", color = Color.LightGray, fontSize = 13.sp)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        TextButton(onClick = { openLastMedia() }) { Text("Abrir archivo") }
+                    }
                 }
             }
-            studioImageBase64?.takeIf { section == JaviSection.IMAGES }?.let { data ->
+        }
+    }
+
+    @Composable
+    private fun ImageStudio() {
+        Column(Modifier.fillMaxSize().padding(22.dp)) {
+            StudioHeader("Imágenes", "Genera una imagen real. También puedes adjuntar una foto para editarla.")
+            studioImageBase64?.let { data ->
                 decodeBitmap(data)?.let { bitmap ->
                     Spacer(Modifier.height(16.dp))
-                    Image(
-                        bitmap.asImageBitmap(),
-                        contentDescription = "Imagen generada",
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
-                        contentScale = ContentScale.Fit
-                    )
+                    Image(bitmap.asImageBitmap(), "Imagen generada", Modifier.fillMaxWidth().heightIn(max = 360.dp), contentScale = ContentScale.Fit)
                 }
             }
             Spacer(Modifier.weight(1f))
-            OutlinedTextField(
-                value = textInput,
-                onValueChange = { textInput = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text(hint) },
-                shape = RoundedCornerShape(22.dp),
-                minLines = 3
-            )
+            selectedImageName?.let { Text("🖼️ $it", color = Color.LightGray, fontSize = 12.sp) }
+            OutlinedTextField(textInput, { textInput = it }, Modifier.fillMaxWidth(), placeholder = { Text("Describe la imagen o la edición") }, shape = RoundedCornerShape(22.dp), minLines = 3)
             Spacer(Modifier.height(10.dp))
-            Button(
-                onClick = {
-                    if (section == JaviSection.IMAGES) generateStudioImage()
-                    else status = "Motor multimedia pendiente de conexión"
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = textInput.isNotBlank() && !thinking
-            ) {
-                Text(if (section == JaviSection.IMAGES) "Generar imagen" else "Generar archivo real")
+            Row {
+                TextButton(onClick = { pickImage.launch("image/*") }, enabled = !thinking) { Text("Adjuntar foto") }
+                Spacer(Modifier.weight(1f))
+                Button(onClick = { generateStudioImage() }, enabled = textInput.isNotBlank() && !thinking) { Text("Generar") }
             }
         }
+    }
+
+    @Composable
+    private fun VideoStudio() {
+        Column(Modifier.fillMaxSize().padding(22.dp)) {
+            StudioHeader("Videos · hasta 1:30", "Escribe el prompt y J.A.V.I. generará video real, lo descargará y lo guardará en Movies/JAVI.")
+            Spacer(Modifier.height(18.dp))
+            Text("Duración", color = Color.White, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(15, 30, 60, 90).forEach { seconds -> Choice("${seconds}s", videoSeconds == seconds) { videoSeconds = seconds } }
+            }
+            Spacer(Modifier.weight(1f))
+            OutlinedTextField(textInput, { textInput = it }, Modifier.fillMaxWidth(), placeholder = { Text("Ej.: video educativo cinematográfico sobre el sistema solar") }, shape = RoundedCornerShape(22.dp), minLines = 3)
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = { generateVideo() }, modifier = Modifier.fillMaxWidth(), enabled = textInput.isNotBlank() && !thinking) {
+                Text(if (thinking) "Generando…" else "Generar video")
+            }
+        }
+    }
+
+    @Composable
+    private fun MusicStudio() {
+        Column(Modifier.fillMaxSize().padding(22.dp)) {
+            StudioHeader("Música · hasta 4:00", "Describe género, ambiente, instrumentos y letra. J.A.V.I. generará un MP3 real y lo guardará en Music/JAVI.")
+            Spacer(Modifier.height(18.dp))
+            Text("Duración", color = Color.White, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(60, 120, 180, 240).forEach { seconds -> Choice("${seconds / 60} min", musicSeconds == seconds) { musicSeconds = seconds } }
+            }
+            Spacer(Modifier.weight(1f))
+            OutlinedTextField(textInput, { textInput = it }, Modifier.fillMaxWidth(), placeholder = { Text("Ej.: lo-fi relajante para estudiar, piano suave y lluvia") }, shape = RoundedCornerShape(22.dp), minLines = 3)
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = { generateMusic() }, modifier = Modifier.fillMaxWidth(), enabled = textInput.isNotBlank() && !thinking) {
+                Text(if (thinking) "Generando…" else "Generar música")
+            }
+        }
+    }
+
+    @Composable
+    private fun AvatarStudio() {
+        Column(Modifier.fillMaxSize().padding(22.dp)) {
+            StudioHeader("Avatares con voz", "Crea un video real de un avatar hablando. Elige personaje y voz.")
+            Spacer(Modifier.height(14.dp))
+            Text("Personaje", color = Color.White, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                Choice("Profesor", avatarPreset == "human-resource") { avatarPreset = "human-resource" }
+                Choice("Coach", avatarPreset == "tennis-coach") { avatarPreset = "tennis-coach" }
+                Choice("Cocina", avatarPreset == "cooking-teacher") { avatarPreset = "cooking-teacher" }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text("Voz", color = Color.White, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Choice("Femenina", avatarVoice == "clara") { avatarVoice = "clara" }
+                Choice("Masculina", avatarVoice == "vincent") { avatarVoice = "vincent" }
+            }
+            Spacer(Modifier.weight(1f))
+            OutlinedTextField(textInput, { textInput = it }, Modifier.fillMaxWidth(), placeholder = { Text("Escribe exactamente lo que dirá el avatar") }, shape = RoundedCornerShape(22.dp), minLines = 4)
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = { generateAvatar() }, modifier = Modifier.fillMaxWidth(), enabled = textInput.isNotBlank() && !thinking) {
+                Text(if (thinking) "Generando…" else "Generar avatar")
+            }
+        }
+    }
+
+    @Composable
+    private fun Choice(label: String, selected: Boolean, onClick: () -> Unit) {
+        TextButton(onClick = onClick) { Text(if (selected) "● $label" else label, color = if (selected) Color(0xFF72E3D1) else Color.LightGray) }
     }
 
     @Composable
@@ -348,9 +408,7 @@ class MainActivity : ComponentActivity(), RecognitionListener {
                 Spacer(Modifier.width(8.dp))
                 Button(onClick = {
                     if (add.isNotBlank()) {
-                        tasks += TaskStore.newTask(add)
-                        TaskStore.save(this@MainActivity, tasks)
-                        add = ""
+                        tasks += TaskStore.newTask(add); TaskStore.save(this@MainActivity, tasks); add = ""
                     }
                 }) { Text("+") }
             }
@@ -360,16 +418,11 @@ class MainActivity : ComponentActivity(), RecognitionListener {
                     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(task.done, onCheckedChange = { checked ->
                             val index = tasks.indexOfFirst { it.id == task.id }
-                            if (index >= 0) {
-                                tasks[index] = task.copy(done = checked)
-                                TaskStore.save(this@MainActivity, tasks)
-                            }
+                            if (index >= 0) { tasks[index] = task.copy(done = checked); TaskStore.save(this@MainActivity, tasks) }
                         })
                         Text(task.title, color = if (task.done) Color.Gray else Color.White, modifier = Modifier.weight(1f))
                         Text("✕", color = Color.Gray, modifier = Modifier.clickable {
-                            val index = tasks.indexOfFirst { it.id == task.id }
-                            if (index >= 0) tasks.removeAt(index)
-                            TaskStore.save(this@MainActivity, tasks)
+                            val index = tasks.indexOfFirst { it.id == task.id }; if (index >= 0) tasks.removeAt(index); TaskStore.save(this@MainActivity, tasks)
                         }.padding(10.dp))
                     }
                 }
@@ -381,10 +434,7 @@ class MainActivity : ComponentActivity(), RecognitionListener {
     private fun Composer() {
         Column(Modifier.fillMaxWidth()) {
             selectedImageName?.let {
-                Text("🖼️ $it  ✕", color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp).clickable {
-                    selectedImageUri = null
-                    selectedImageName = null
-                })
+                Text("🖼️ $it  ✕", color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp).clickable { selectedImageUri = null; selectedImageName = null })
             }
             Row(Modifier.fillMaxWidth().padding(12.dp, 10.dp), verticalAlignment = Alignment.Bottom) {
                 FilledTonalIconButton(onClick = { pickImage.launch("image/*") }, modifier = Modifier.size(48.dp)) { Text("+", fontSize = 27.sp) }
@@ -393,13 +443,7 @@ class MainActivity : ComponentActivity(), RecognitionListener {
                 Spacer(Modifier.width(7.dp))
                 FilledTonalIconButton(onClick = { startVoice() }, modifier = Modifier.size(48.dp)) { Text(if (listening) "••" else "🎤") }
                 Spacer(Modifier.width(5.dp))
-                Button(
-                    onClick = { sendTypedMessage() },
-                    modifier = Modifier.size(48.dp),
-                    shape = CircleShape,
-                    contentPadding = PaddingValues(0.dp),
-                    enabled = !thinking && (textInput.isNotBlank() || selectedImageUri != null)
-                ) { Text("↑", fontSize = 23.sp) }
+                Button(onClick = { sendTypedMessage() }, modifier = Modifier.size(48.dp), shape = CircleShape, contentPadding = PaddingValues(0.dp), enabled = !thinking && (textInput.isNotBlank() || selectedImageUri != null)) { Text("↑", fontSize = 23.sp) }
             }
         }
     }
@@ -408,120 +452,132 @@ class MainActivity : ComponentActivity(), RecognitionListener {
     private fun Bubble(message: UiMessage) {
         val user = message.role == "user"
         Row(Modifier.fillMaxWidth(), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(if (user) .86f else .94f),
-                color = if (user) Color(0xFF263238) else Color.Transparent,
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            Surface(modifier = Modifier.fillMaxWidth(if (user) .86f else .94f), color = if (user) Color(0xFF263238) else Color.Transparent, shape = RoundedCornerShape(20.dp)) {
                 Column(Modifier.padding(14.dp, 11.dp)) {
                     if (!user) Text("J.A.V.I.", color = Color(0xFF72E3D1), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     Text(message.content, color = Color(0xFFF2F3F5), fontSize = 15.sp, lineHeight = 21.sp)
-                    message.imageBase64?.let { data ->
-                        decodeBitmap(data)?.let { bitmap ->
-                            Image(bitmap.asImageBitmap(), "Imagen", Modifier.fillMaxWidth().heightIn(max = 420.dp), contentScale = ContentScale.Fit)
-                        }
-                    }
+                    message.imageBase64?.let { data -> decodeBitmap(data)?.let { bitmap -> Image(bitmap.asImageBitmap(), "Imagen", Modifier.fillMaxWidth().heightIn(max = 420.dp), contentScale = ContentScale.Fit) } }
                 }
             }
         }
     }
 
     private fun decodeBitmap(data: String) = runCatching {
-        val bytes = Base64.decode(data, Base64.DEFAULT)
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        val bytes = Base64.decode(data, Base64.DEFAULT); BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     }.getOrNull()
 
     private fun resolveName(uri: Uri): String = try {
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-            if (it.moveToFirst()) it.getString(0) else "Imagen"
-        } ?: "Imagen"
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else "Imagen" } ?: "Imagen"
     } catch (_: Exception) { "Imagen" }
 
     private fun isImageAction(text: String, hasImage: Boolean): Boolean {
         val value = text.lowercase()
-        return if (hasImage) {
-            listOf("edita", "editar", "cambia", "quita", "elimina", "agrega", "añade", "transforma", "convierte", "mejora").any { value.contains(it) }
-        } else {
-            listOf("crea una imagen", "genera una imagen", "haz una imagen", "dibuja", "diseña una imagen").any { value.contains(it) }
-        }
+        return if (hasImage) listOf("edita", "editar", "cambia", "quita", "elimina", "agrega", "añade", "transforma", "convierte", "mejora").any { value.contains(it) }
+        else listOf("crea una imagen", "genera una imagen", "haz una imagen", "dibuja", "diseña una imagen").any { value.contains(it) }
     }
 
     private fun generateStudioImage() {
-        val prompt = textInput.trim()
-        if (prompt.isBlank() || thinking) return
-        textInput = ""
-        thinking = true
-        status = "Generando imagen…"
+        val prompt = textInput.trim(); if (prompt.isBlank() || thinking) return
+        textInput = ""; thinking = true; status = "Generando imagen…"
         lifecycleScope.launch {
             try {
-                val result = ApiClient.generateImage(prompt, selectedImageUri)
-                studioImageBase64 = result.base64
-                status = "Listo"
-            } catch (e: Exception) {
-                status = e.message ?: "No pude generar la imagen"
-            } finally {
-                thinking = false
-                selectedImageUri = null
-                selectedImageName = null
-            }
+                val result = if (selectedImageUri == null) {
+                    MediaClient.generateImage(prompt).let { CoreWebBridge.ImageResult(it.reply, it.base64, it.mimeType) }
+                } else ApiClient.generateImage(prompt, selectedImageUri)
+                studioImageBase64 = result.base64; status = "Imagen generada"
+            } catch (e: Exception) { status = e.message ?: "No pude generar la imagen" }
+            finally { thinking = false; selectedImageUri = null; selectedImageName = null }
         }
     }
 
+    private fun generateVideo() {
+        val prompt = textInput.trim(); if (prompt.isBlank() || thinking) return
+        textInput = ""; thinking = true; mediaProgress = 0; lastMediaLabel = null; status = "Iniciando video…"
+        lifecycleScope.launch {
+            try {
+                val media = MediaClient.generateVideo(prompt, videoSeconds) { p -> mediaProgress = p; status = "Generando video… $p%" }
+                status = "Uniendo y guardando video…"
+                val uri = MediaSaver.saveVideo(this@MainActivity, media.urls, "JAVI_${System.currentTimeMillis()}.mp4")
+                lastMediaUri = uri; lastMediaMime = "video/mp4"; lastMediaLabel = "Video generado"; mediaProgress = 100; status = "Video listo"
+            } catch (e: Exception) { status = e.message ?: "No pude generar el video" }
+            finally { thinking = false }
+        }
+    }
+
+    private fun generateMusic() {
+        val prompt = textInput.trim(); if (prompt.isBlank() || thinking) return
+        textInput = ""; thinking = true; mediaProgress = 0; lastMediaLabel = null; status = "Generando música…"
+        lifecycleScope.launch {
+            try {
+                val media = MediaClient.generateMusic(prompt, musicSeconds)
+                status = "Guardando música…"
+                val uri = MediaSaver.saveMusic(this@MainActivity, media.urls.first(), "JAVI_${System.currentTimeMillis()}.mp3")
+                lastMediaUri = uri; lastMediaMime = "audio/mpeg"; lastMediaLabel = "Música generada"; mediaProgress = 100; status = "Música lista"
+            } catch (e: Exception) { status = e.message ?: "No pude generar la música" }
+            finally { thinking = false }
+        }
+    }
+
+    private fun generateAvatar() {
+        val script = textInput.trim(); if (script.isBlank() || thinking) return
+        textInput = ""; thinking = true; mediaProgress = 0; lastMediaLabel = null; status = "Creando avatar…"
+        lifecycleScope.launch {
+            try {
+                val media = MediaClient.generateAvatar(script, avatarPreset, avatarVoice) { p -> mediaProgress = p; status = "Generando avatar… $p%" }
+                status = "Guardando avatar…"
+                val uri = MediaSaver.saveVideo(this@MainActivity, media.urls, "JAVI_Avatar_${System.currentTimeMillis()}.mp4")
+                lastMediaUri = uri; lastMediaMime = "video/mp4"; lastMediaLabel = "Avatar generado"; mediaProgress = 100; status = "Avatar listo"
+            } catch (e: Exception) { status = e.message ?: "No pude generar el avatar" }
+            finally { thinking = false }
+        }
+    }
+
+    private fun openLastMedia() {
+        val uri = lastMediaUri ?: return
+        val mime = lastMediaMime ?: "*/*"
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, mime); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) })
+        }.onFailure { status = "El archivo está guardado, pero no encontré una app para abrirlo" }
+    }
+
     private fun sendTypedMessage() {
-        val text = textInput.trim()
-        val image = selectedImageUri
+        val text = textInput.trim(); val image = selectedImageUri
         if (text.isBlank() && image == null) return
-        textInput = ""
-        selectedImageUri = null
-        selectedImageName = null
+        textInput = ""; selectedImageUri = null; selectedImageName = null
         sendToJavi(if (text.isBlank()) "¿Qué observas en esta imagen?" else text, image)
     }
 
     private fun sendToJavi(text: String, image: Uri? = null) {
-        messages += UiMessage("user", text)
-        saveChat()
-        thinking = true
-        status = "Pensando…"
+        messages += UiMessage("user", text); saveChat(); thinking = true; status = "Pensando…"
         lifecycleScope.launch {
             try {
                 if (isImageAction(text, image != null)) {
-                    val result = ApiClient.generateImage(text, image)
-                    messages += UiMessage("assistant", result.reply, result.base64)
-                    speak(result.reply)
+                    val result = if (image == null) MediaClient.generateImage(text).let { CoreWebBridge.ImageResult(it.reply, it.base64, it.mimeType) } else ApiClient.generateImage(text, image)
+                    messages += UiMessage("assistant", result.reply, result.base64); speak(result.reply)
                 } else {
                     val reply = ApiClient.sendMessage(messages.map { ChatMessage(it.role, it.content) }, image)
-                    messages += UiMessage("assistant", reply)
-                    speak(reply)
+                    messages += UiMessage("assistant", reply); speak(reply)
                 }
                 status = "Listo"
             } catch (e: Exception) {
-                messages += UiMessage("assistant", e.message ?: "No pude procesar la solicitud.")
-                status = "Error"
-            } finally {
-                thinking = false
-                saveChat()
-            }
+                messages += UiMessage("assistant", e.message ?: "No pude procesar la solicitud."); status = "Error"
+            } finally { thinking = false; saveChat() }
         }
     }
 
     private fun startVoice() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) listen()
-        else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) listen() else micPermission.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     private fun listen() {
         if (listening) return
-        listening = true
-        status = "Escuchando…"
+        listening = true; status = "Escuchando…"
         try {
             recognizer.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-DO")
             })
-        } catch (_: Exception) {
-            listening = false
-            status = "No pude iniciar el micrófono"
-        }
+        } catch (_: Exception) { listening = false; status = "No pude iniciar el micrófono" }
     }
 
     private fun speak(text: String) {
@@ -529,11 +585,9 @@ class MainActivity : ComponentActivity(), RecognitionListener {
     }
 
     override fun onResults(results: Bundle?) {
-        listening = false
-        status = "Listo"
+        listening = false; status = "Listo"
         results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()?.takeIf { it.isNotBlank() }?.let { sendToJavi(it) }
     }
-
     override fun onError(error: Int) { listening = false; status = "Listo" }
     override fun onReadyForSpeech(params: Bundle?) {}
     override fun onBeginningOfSpeech() {}
@@ -544,9 +598,6 @@ class MainActivity : ComponentActivity(), RecognitionListener {
     override fun onEvent(eventType: Int, params: Bundle?) {}
 
     override fun onDestroy() {
-        saveChat()
-        runCatching { recognizer.destroy() }
-        runCatching { tts.shutdown() }
-        super.onDestroy()
+        saveChat(); runCatching { recognizer.destroy() }; runCatching { tts.shutdown() }; super.onDestroy()
     }
 }
