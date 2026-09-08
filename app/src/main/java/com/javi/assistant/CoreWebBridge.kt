@@ -3,18 +3,11 @@ package com.javi.assistant
 import android.content.Context
 import android.net.Uri
 import android.util.Base64
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
 
 object CoreWebBridge {
-    private const val CORE_ORIGIN = "https://j-a-v-i-45ursb.v2.appdeploy.ai"
-    private const val ANDROID_CHAT_URL = "$CORE_ORIGIN/api/android-chat"
     @Volatile private var appContext: Context? = null
 
     data class ImageResult(val reply: String, val base64: String, val mimeType: String)
@@ -24,33 +17,25 @@ object CoreWebBridge {
     }
 
     suspend fun sendMessage(history: List<ChatMessage>, imageUri: Uri? = null): String {
-        if (imageUri == null) return withContext(Dispatchers.IO) {
-            val contextText = history.takeLast(12).joinToString("\n") { message ->
-                if (message.role == "assistant") "J.A.V.I.: ${message.content}" else "Usuario: ${message.content}"
-            }
-            val body = getJson(ANDROID_CHAT_URL, contextText)
-            JSONObject(body).optString("reply").ifBlank { "No obtuve respuesta." }
-        }
         val payload = JSONObject().apply {
             put("messages", JSONArray().apply {
-                history.takeLast(12).forEach { message ->
-                    put(JSONObject().apply { put("role", message.role); put("content", message.content) })
+                history.takeLast(20).forEach { message ->
+                    put(JSONObject().apply {
+                        put("role", message.role)
+                        put("content", message.content)
+                    })
                 }
             })
-            put("image", imageJson(imageUri))
+            imageUri?.let { put("image", imageJson(it)) }
         }
         val body = BrowserPostBridge.postJson("/api/chat", payload, 120_000)
         return JSONObject(body).optString("reply").ifBlank { "No obtuve respuesta." }
     }
 
     suspend fun generateImage(prompt: String, imageUri: Uri? = null): ImageResult {
-        if (imageUri == null) {
-            val result = MediaClient.generateImage(prompt)
-            return ImageResult(result.reply, result.base64, result.mimeType)
-        }
         val payload = JSONObject().apply {
             put("prompt", prompt.trim())
-            put("image", imageJson(imageUri))
+            imageUri?.let { put("image", imageJson(it)) }
         }
         val body = BrowserPostBridge.postJson("/api/image", payload, 180_000)
         val json = JSONObject(body)
@@ -85,40 +70,6 @@ object CoreWebBridge {
         return JSONObject().apply {
             put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
             put("mimeType", allowedMime)
-        }
-    }
-
-    private fun getJson(endpoint: String, message: String): String {
-        val encoded = URLEncoder.encode(message, "UTF-8")
-        val connection = (URL("$endpoint?q=$encoded").openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 20_000
-            readTimeout = 90_000
-            doInput = true
-            useCaches = false
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "JAVI-Android/0.16")
-        }
-        return readResponse(connection)
-    }
-
-    private fun readResponse(connection: HttpURLConnection): String {
-        return try {
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (code !in 200..299) {
-                val detail = runCatching {
-                    JSONObject(body).optString("error").ifBlank { JSONObject(body).optString("message") }
-                }.getOrDefault("").ifBlank {
-                    body.replace(Regex("<[^>]+>"), " ").replace(Regex("\\s+"), " ").trim().take(220)
-                }
-                throw IllegalStateException("J.A.V.I. Core respondió $code: ${detail.ifBlank { "Error HTTP" }}")
-            }
-            if (body.isBlank()) throw IllegalStateException("J.A.V.I. Core respondió vacío.")
-            body
-        } finally {
-            connection.disconnect()
         }
     }
 }
