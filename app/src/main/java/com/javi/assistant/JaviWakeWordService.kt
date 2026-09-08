@@ -18,16 +18,7 @@ import org.vosk.android.SpeechService
 import org.vosk.android.StorageService
 import java.util.Locale
 
-/**
- * Escucha persistente de JAVI v0.13.
- *
- * IMPORTANTE: SpeechRecognizer de Android NO se mantiene escuchando todo el día.
- * Vosk mantiene un detector LOCAL y OFFLINE limitado a la palabra "javi".
- * SpeechRecognizer se crea únicamente después de detectar el wake word para
- * transcribir una sola orden y se destruye al terminar.
- */
 class JaviWakeWordService : Service(), org.vosk.android.RecognitionListener {
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var wakeModel: Model? = null
     private var wakeSpeech: SpeechService? = null
@@ -44,28 +35,20 @@ class JaviWakeWordService : Service(), org.vosk.android.RecognitionListener {
         createChannel()
         startForeground(NOTIFICATION_ID, notification("Preparando detector local de Javi…"))
         acquireWakeLock()
-
         tts = TextToSpeech(this) { result ->
             if (result == TextToSpeech.SUCCESS) {
                 tts?.language = Locale("es", "DO")
-                tts?.setPitch(0.84f)
-                tts?.setSpeechRate(0.96f)
+                tts?.setPitch(0.84f); tts?.setSpeechRate(0.96f)
             }
         }
-
         loadWakeModel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stoppedByUser = true
-            JaviConfig.setWakeEnabled(this, false)
-            stopSelf()
-            return START_NOT_STICKY
+            stoppedByUser = true; JaviConfig.setWakeEnabled(this, false); stopSelf(); return START_NOT_STICKY
         }
-        stoppedByUser = false
-        JaviConfig.setWakeEnabled(this, true)
-        acquireWakeLock()
+        stoppedByUser = false; JaviConfig.setWakeEnabled(this, true); acquireWakeLock()
         if (wakeModel != null && !commandMode && wakeSpeech == null) startWakeListening()
         return START_STICKY
     }
@@ -73,43 +56,28 @@ class JaviWakeWordService : Service(), org.vosk.android.RecognitionListener {
     private fun loadWakeModel() {
         if (wakeStarting || stoppedByUser) return
         wakeStarting = true
-        StorageService.unpack(
-            this,
-            "model-es",
-            "javi-vosk-es",
-            { model ->
-                wakeStarting = false
-                wakeModel = model
-                startWakeListening()
-            },
+        updateNotification("Cargando modelo local de Javi…")
+        StorageService.unpack(this, "model-es", "javi-vosk-es-v2",
+            { model -> wakeStarting = false; wakeModel = model; startWakeListening() },
             { error ->
                 wakeStarting = false
-                updateNotification("Error cargando escucha local")
-                scope.launch {
-                    delay(2500)
-                    if (!stoppedByUser) loadWakeModel()
-                }
-            }
-        )
+                val detail = error.message?.take(90) ?: error.javaClass.simpleName
+                updateNotification("Error modelo: $detail")
+                scope.launch { delay(3000); if (!stoppedByUser) loadWakeModel() }
+            })
     }
 
     private fun startWakeListening() {
         if (stoppedByUser || commandMode || wakeSpeech != null) return
         val model = wakeModel ?: return
         try {
-            // Gramática mínima: el motor local solo necesita reconocer el nombre Javi.
             val recognizer = Recognizer(model, 16000.0f, "[\"javi\", \"[unk]\"]")
-            wakeSpeech = SpeechService(recognizer, 16000.0f).also {
-                it.startListening(this)
-            }
+            wakeSpeech = SpeechService(recognizer, 16000.0f).also { it.startListening(this) }
             updateNotification("Escuchando localmente · di “Javi”")
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             wakeSpeech = null
-            updateNotification("Reiniciando escucha local…")
-            scope.launch {
-                delay(1000)
-                startWakeListening()
-            }
+            updateNotification("Error escucha: ${(e.message ?: e.javaClass.simpleName).take(90)}")
+            scope.launch { delay(1200); startWakeListening() }
         }
     }
 
@@ -119,47 +87,26 @@ class JaviWakeWordService : Service(), org.vosk.android.RecognitionListener {
         wakeSpeech = null
     }
 
-    private fun voskText(json: String): String {
-        return Regex("\\\"(?:partial|text)\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"")
-            .find(json)?.groupValues?.getOrNull(1).orEmpty().lowercase(Locale.ROOT)
-    }
-
+    private fun voskText(json: String) = Regex("\\\"(?:partial|text)\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"")
+        .find(json)?.groupValues?.getOrNull(1).orEmpty().lowercase(Locale.ROOT)
     private fun inspectWake(json: String) {
-        if (commandMode || stoppedByUser) return
-        val text = voskText(json)
-        if (text.split(' ').any { it == "javi" }) activateCommandMode()
+        if (!commandMode && !stoppedByUser && voskText(json).split(' ').any { it == "javi" }) activateCommandMode()
     }
-
-    override fun onPartialResult(hypothesis: String?) {
-        if (hypothesis != null) inspectWake(hypothesis)
-    }
-
-    override fun onResult(hypothesis: String?) {
-        if (hypothesis != null) inspectWake(hypothesis)
-    }
-
-    override fun onFinalResult(hypothesis: String?) {
-        if (hypothesis != null) inspectWake(hypothesis)
-    }
-
+    override fun onPartialResult(hypothesis: String?) { hypothesis?.let(::inspectWake) }
+    override fun onResult(hypothesis: String?) { hypothesis?.let(::inspectWake) }
+    override fun onFinalResult(hypothesis: String?) { hypothesis?.let(::inspectWake) }
     override fun onError(exception: Exception?) {
         if (stoppedByUser || commandMode) return
-        stopWakeListening()
-        scope.launch { delay(700); startWakeListening() }
+        stopWakeListening(); scope.launch { delay(700); startWakeListening() }
     }
-
     override fun onTimeout() {
         if (stoppedByUser || commandMode) return
-        stopWakeListening()
-        scope.launch { delay(150); startWakeListening() }
+        stopWakeListening(); scope.launch { delay(150); startWakeListening() }
     }
 
     private fun activateCommandMode() {
         if (commandMode || stoppedByUser) return
-        commandMode = true
-        stopWakeListening()
-        updateNotification("Javi activado · dime la orden")
-        listenForOneCommand()
+        commandMode = true; stopWakeListening(); updateNotification("Javi activado · dime la orden"); listenForOneCommand()
     }
 
     private fun listenForOneCommand() {
@@ -173,34 +120,21 @@ class JaviWakeWordService : Service(), org.vosk.android.RecognitionListener {
                 override fun onEndOfSpeech() {}
                 override fun onEvent(eventType: Int, params: Bundle?) {}
                 override fun onPartialResults(partialResults: Bundle?) {}
-
                 override fun onResults(results: Bundle?) {
-                    val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull().orEmpty().trim()
-                    destroyCommandRecognizer()
-                    if (text.isBlank()) returnToWake()
-                    else executeCommand(text)
+                    val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty().trim()
+                    destroyCommandRecognizer(); if (text.isBlank()) returnToWake() else executeCommand(text)
                 }
-
-                override fun onError(error: Int) {
-                    destroyCommandRecognizer()
-                    speakAndReturn("No entendí la orden.")
-                }
+                override fun onError(error: Int) { destroyCommandRecognizer(); speakAndReturn("No entendí la orden.") }
             })
         }
-
         try {
             commandRecognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-DO")
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "es-DO")
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
             })
-        } catch (_: Exception) {
-            destroyCommandRecognizer()
-            speakAndReturn("No pude iniciar el reconocimiento de la orden.")
-        }
+        } catch (_: Exception) { destroyCommandRecognizer(); speakAndReturn("No pude iniciar el reconocimiento de la orden.") }
     }
 
     private fun executeCommand(text: String) {
@@ -211,126 +145,56 @@ class JaviWakeWordService : Service(), org.vosk.android.RecognitionListener {
                     JaviCommand.WakePc -> {
                         val mac = JaviConfig.pcMac(this@JaviWakeWordService)
                         if (mac.isBlank()) "Primero configura la dirección MAC de tu computadora en Javi."
-                        else if (WakeOnLan.send(mac, JaviConfig.pcBroadcast(this@JaviWakeWordService)))
-                            "Activando el computador."
+                        else if (WakeOnLan.send(mac, JaviConfig.pcBroadcast(this@JaviWakeWordService))) "Activando el computador."
                         else "No pude enviar la señal al computador."
                     }
-                    is JaviCommand.AskCore -> try {
-                        ApiClient.sendMessage(listOf(ChatMessage("user", command.text)))
-                    } catch (_: Exception) { "No pude comunicarme con el núcleo de Javi." }
+                    is JaviCommand.AskCore -> try { ApiClient.sendMessage(listOf(ChatMessage("user", command.text))) } catch (_: Exception) { "No pude comunicarme con el núcleo de Javi." }
                     is JaviCommand.OpenApp -> {
                         val match = try { PhoneActions.openAppByName(this@JaviWakeWordService, command.appName) } catch (_: Exception) { null }
-                        if (match != null) "Abriendo ${match.label}."
-                        else "No encontré ${command.appName} entre tus aplicaciones instaladas."
+                        if (match != null) "Abriendo ${match.label}." else "No encontré ${command.appName} entre tus aplicaciones instaladas."
                     }
-                    is JaviCommand.SetAlarm -> try {
-                        PhoneActions.setAlarm(this@JaviWakeWordService, command.hour, command.minute)
-                        "Preparando la alarma."
-                    } catch (_: Exception) { "No pude abrir la aplicación de alarma." }
+                    is JaviCommand.SetAlarm -> try { PhoneActions.setAlarm(this@JaviWakeWordService, command.hour, command.minute); "Preparando la alarma." } catch (_: Exception) { "No pude abrir la aplicación de alarma." }
                 }
-            } catch (_: Exception) {
-                "Ocurrió un problema ejecutando la orden."
-            }
+            } catch (_: Exception) { "Ocurrió un problema ejecutando la orden." }
             speakAndReturn(reply)
         }
     }
 
     private fun speakAndReturn(text: String) {
-        if (!JaviConfig.voiceEnabled(this)) {
-            returnToWake()
-            return
-        }
+        if (!JaviConfig.voiceEnabled(this)) { returnToWake(); return }
         val id = "javi-${System.currentTimeMillis()}"
         tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
             override fun onDone(utteranceId: String?) { scope.launch { returnToWake() } }
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) { scope.launch { returnToWake() } }
+            @Deprecated("Deprecated in Java") override fun onError(utteranceId: String?) { scope.launch { returnToWake() } }
         })
         val r = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
         if (r == null || r == TextToSpeech.ERROR) returnToWake()
     }
-
-    private fun returnToWake() {
-        destroyCommandRecognizer()
-        commandMode = false
-        if (!stoppedByUser) startWakeListening()
-    }
-
+    private fun returnToWake() { destroyCommandRecognizer(); commandMode = false; if (!stoppedByUser) startWakeListening() }
     private fun destroyCommandRecognizer() {
-        try { commandRecognizer?.cancel() } catch (_: Exception) {}
-        try { commandRecognizer?.destroy() } catch (_: Exception) {}
-        commandRecognizer = null
+        try { commandRecognizer?.cancel() } catch (_: Exception) {}; try { commandRecognizer?.destroy() } catch (_: Exception) {}; commandRecognizer = null
     }
-
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
-        wakeLock = getSystemService(PowerManager::class.java)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "JAVI:LocalWakeWord").apply {
-                setReferenceCounted(false)
-                acquire()
-            }
+        wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "JAVI:LocalWakeWord").apply { setReferenceCounted(false); acquire() }
     }
-
     private fun notification(text: String): Notification {
-        val stopIntent = PendingIntent.getService(
-            this, 2, Intent(this, JaviWakeWordService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val openIntent = PendingIntent.getActivity(
-            this, 1, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("J.A.V.I. · wake word local")
-            .setContentText(text)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setContentIntent(openIntent)
-            .addAction(0, "Detener", stopIntent)
-            .build()
+        val stopIntent = PendingIntent.getService(this, 2, Intent(this, JaviWakeWordService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val openIntent = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentTitle("J.A.V.I. · wake word local").setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text)).setOngoing(true).setOnlyAlertOnce(true).setContentIntent(openIntent).addAction(0, "Detener", stopIntent).build()
     }
-
-    private fun updateNotification(text: String) {
-        try { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text)) } catch (_: Exception) {}
-    }
-
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "J.A.V.I. wake word local", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
-    }
-
+    private fun updateNotification(text: String) { try { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text)) } catch (_: Exception) {} }
+    private fun createChannel() { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, "J.A.V.I. wake word local", NotificationManager.IMPORTANCE_LOW)) }
     override fun onDestroy() {
-        stoppedByUser = true
-        stopWakeListening()
-        destroyCommandRecognizer()
-        try { wakeModel?.close() } catch (_: Exception) {}
-        try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
-        tts?.shutdown()
-        scope.cancel()
-        super.onDestroy()
+        stoppedByUser = true; stopWakeListening(); destroyCommandRecognizer(); try { wakeModel?.close() } catch (_: Exception) {}; try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}; tts?.shutdown(); scope.cancel(); super.onDestroy()
     }
-
     override fun onBind(intent: Intent?): IBinder? = null
-
     companion object {
         const val ACTION_STOP = "com.javi.assistant.STOP_WAKE"
         private const val CHANNEL_ID = "javi_wake"
         private const val NOTIFICATION_ID = 704
-
-        fun start(context: Context) {
-            val i = Intent(context, JaviWakeWordService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(i)
-            else context.startService(i)
-        }
-
-        fun stop(context: Context) {
-            context.stopService(Intent(context, JaviWakeWordService::class.java))
-            JaviConfig.setWakeEnabled(context, false)
-        }
+        fun start(context: Context) { val i = Intent(context, JaviWakeWordService::class.java); if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(i) else context.startService(i) }
+        fun stop(context: Context) { context.stopService(Intent(context, JaviWakeWordService::class.java)); JaviConfig.setWakeEnabled(context, false) }
     }
 }
