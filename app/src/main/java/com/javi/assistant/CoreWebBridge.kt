@@ -1,170 +1,107 @@
 package com.javi.assistant
 
-import android.annotation.SuppressLint
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.suspendCancellableCoroutine
-import org.json.JSONTokener
+import android.net.Uri
+import android.util.Base64
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
-import kotlin.coroutines.resume
+import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 
 object CoreWebBridge {
-    private const val CORE_URL = "https://j-a-v-i-45ursb.v2.appdeploy.ai/"
-    private val mutex = Mutex()
-    private val mainHandler = Handler(Looper.getMainLooper())
-
+    private const val CHAT_URL = "https://j-a-v-i-45ursb.v2.appdeploy.ai/api/chat"
+    private const val IMAGE_URL = "https://j-a-v-i-45ursb.v2.appdeploy.ai/api/image"
     @Volatile private var appContext: Context? = null
-    @Volatile private var webView: WebView? = null
-    @Volatile private var pageReady = false
+
+    data class ImageResult(val reply: String, val base64: String, val mimeType: String)
 
     fun init(context: Context) {
         appContext = context.applicationContext
-        mainHandler.post { ensureWebView() }
     }
 
-    suspend fun sendMessage(text: String): String = mutex.withLock {
-        val clean = text.trim()
-        if (clean.isBlank()) return "No recibí ningún mensaje."
-
-        suspendCancellableCoroutine { cont ->
-            mainHandler.post {
-                ensureWebView()
-                waitUntilReady(
-                    startedAt = System.currentTimeMillis(),
-                    onReady = {
-                        val view = webView
-                        if (view == null) {
-                            if (cont.isActive) cont.resume("No pude iniciar la conexión con J.A.V.I. Core.")
-                            return@waitUntilReady
-                        }
-
-                        getAssistantCount(view) { beforeCount ->
-                            injectMessage(view, clean) { sent ->
-                                if (!sent) {
-                                    if (cont.isActive) cont.resume("No pude enviar el mensaje a J.A.V.I. Core.")
-                                    return@injectMessage
-                                }
-                                pollReply(
-                                    view = view,
-                                    previousCount = beforeCount,
-                                    startedAt = System.currentTimeMillis()
-                                ) { reply ->
-                                    if (cont.isActive) cont.resume(reply)
-                                }
-                            }
-                        }
-                    },
-                    onTimeout = {
-                        if (cont.isActive) cont.resume("J.A.V.I. Core tardó demasiado en iniciar.")
-                    }
-                )
-            }
-        }
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun ensureWebView() {
-        if (webView != null) return
-        val context = appContext ?: return
-
-        webView = WebView(context).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.databaseEnabled = true
-            settings.loadsImagesAutomatically = false
-            settings.mediaPlaybackRequiresUserGesture = true
-            webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    super.onPageFinished(view, url)
-                    pageReady = true
+    suspend fun sendMessage(history: List<ChatMessage>, imageUri: Uri? = null): String = withContext(Dispatchers.IO) {
+        val payload = JSONObject().apply {
+            put("messages", JSONArray().apply {
+                history.forEach { message ->
+                    put(JSONObject().apply {
+                        put("role", message.role)
+                        put("content", message.content)
+                    })
                 }
+            })
+            imageUri?.let { put("image", imageJson(it)) }
+        }
+        val body = postJson(CHAT_URL, payload)
+        JSONObject(body).optString("reply").ifBlank { "No obtuve respuesta." }
+    }
+
+    suspend fun generateImage(prompt: String, imageUri: Uri? = null): ImageResult = withContext(Dispatchers.IO) {
+        val payload = JSONObject().apply {
+            put("prompt", prompt.trim())
+            imageUri?.let { put("image", imageJson(it)) }
+        }
+        val body = postJson(IMAGE_URL, payload)
+        val json = JSONObject(body)
+        val image = json.optJSONObject("image") ?: throw IllegalStateException("J.A.V.I. no devolvió una imagen.")
+        ImageResult(
+            reply = json.optString("reply").ifBlank { "Listo." },
+            base64 = image.optString("data"),
+            mimeType = image.optString("mimeType").ifBlank { "image/png" }
+        )
+    }
+
+    private fun imageJson(uri: Uri): JSONObject {
+        val context = appContext ?: throw IllegalStateException("J.A.V.I. Core no está inicializado.")
+        val mime = context.contentResolver.getType(uri)?.lowercase()
+        val allowedMime = when (mime) {
+            "image/png", "image/webp", "image/jpeg" -> mime
+            else -> "image/jpeg"
+        }
+        val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+            val out = ByteArrayOutputStream()
+            val buffer = ByteArray(16 * 1024)
+            var total = 0
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                total += read
+                if (total > 6 * 1024 * 1024) {
+                    throw IllegalArgumentException("La imagen supera el límite de 6 MB. Elige una imagen más pequeña.")
+                }
+                out.write(buffer, 0, read)
             }
-            loadUrl(CORE_URL)
+            out.toByteArray()
+        } ?: throw IllegalArgumentException("No pude leer la imagen seleccionada.")
+        return JSONObject().apply {
+            put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
+            put("mimeType", allowedMime)
         }
     }
 
-    private fun waitUntilReady(startedAt: Long, onReady: () -> Unit, onTimeout: () -> Unit) {
-        if (pageReady) {
-            onReady()
-            return
+    private fun postJson(endpoint: String, payload: JSONObject): String {
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 20_000
+            readTimeout = 90_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Accept", "application/json")
         }
-        if (System.currentTimeMillis() - startedAt > 20_000L) {
-            onTimeout()
-            return
-        }
-        mainHandler.postDelayed({ waitUntilReady(startedAt, onReady, onTimeout) }, 300L)
-    }
-
-    private fun getAssistantCount(view: WebView, callback: (Int) -> Unit) {
-        view.evaluateJavascript(
-            "document.querySelectorAll('.row.assistant .bubble').length.toString();"
-        ) { raw ->
-            callback(decodeJsString(raw).toIntOrNull() ?: 0)
-        }
-    }
-
-    private fun injectMessage(view: WebView, text: String, callback: (Boolean) -> Unit) {
-        val quoted = JSONObject.quote(text)
-        val js = """
-            (function(){
-              const ta=document.querySelector('textarea');
-              const btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='ENVIAR');
-              if(!ta||!btn) return 'NO_UI';
-              const setter=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set;
-              setter.call(ta,$quoted);
-              ta.dispatchEvent(new Event('input',{bubbles:true}));
-              ta.dispatchEvent(new Event('change',{bubbles:true}));
-              btn.click();
-              return 'OK';
-            })();
-        """.trimIndent()
-
-        view.evaluateJavascript(js) { raw ->
-            callback(decodeJsString(raw) == "OK")
-        }
-    }
-
-    private fun pollReply(
-        view: WebView,
-        previousCount: Int,
-        startedAt: Long,
-        callback: (String) -> Unit
-    ) {
-        if (System.currentTimeMillis() - startedAt > 55_000L) {
-            callback("J.A.V.I. Core tardó demasiado en responder.")
-            return
-        }
-
-        val js = """
-            (function(){
-              const items=document.querySelectorAll('.row.assistant .bubble');
-              if(items.length<=$previousCount) return '';
-              return (items[items.length-1].textContent||'').trim();
-            })();
-        """.trimIndent()
-
-        view.evaluateJavascript(js) { raw ->
-            val value = decodeJsString(raw)
-            if (value.isNotBlank()) {
-                callback(value)
-            } else {
-                mainHandler.postDelayed({ pollReply(view, previousCount, startedAt, callback) }, 450L)
-            }
-        }
-    }
-
-    private fun decodeJsString(raw: String?): String {
-        if (raw.isNullOrBlank() || raw == "null") return ""
         return try {
-            val value = JSONTokener(raw).nextValue()
-            value?.toString().orEmpty()
-        } catch (_: Exception) {
-            raw.trim().trim('"')
+            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) {
+                val detail = runCatching { JSONObject(body).optString("error") }.getOrNull().orEmpty()
+                throw IllegalStateException(if (detail.isNotBlank()) detail else "Error $code comunicando con J.A.V.I. Core")
+            }
+            body
+        } finally {
+            connection.disconnect()
         }
     }
 }
