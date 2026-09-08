@@ -31,10 +31,10 @@ jobs:
       - name: Validate release bundle
         run: gradle bundleRelease --stacktrace
       - name: Rename debug APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk JAVI-Assistant-v0.9-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk JAVI-Assistant-v0.11-debug.apk
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: JAVI-Assistant-v0.9-debug
-          path: JAVI-Assistant-v0.9-debug.apk
+          name: JAVI-Assistant-v0.11-debug
+          path: JAVI-Assistant-v0.11-debug.apk
           if-no-files-found: error
