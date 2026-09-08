@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.PowerManager
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -18,6 +19,7 @@ class JaviWakeWordService : Service(), RecognitionListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var recognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
+    private var wakeLock: PowerManager.WakeLock? = null
     private var busy = false
     private var stoppedByUser = false
     private var listening = false
@@ -28,7 +30,8 @@ class JaviWakeWordService : Service(), RecognitionListener {
         super.onCreate()
         ApiClient.init(this)
         createChannel()
-        startForeground(NOTIFICATION_ID, notification("Escuchando · di “Javi…”"))
+        startForeground(NOTIFICATION_ID, notification("Iniciando micrófono…"))
+        acquireWakeLock()
 
         tts = TextToSpeech(this) { result ->
             if (result == TextToSpeech.SUCCESS) {
@@ -43,8 +46,11 @@ class JaviWakeWordService : Service(), RecognitionListener {
 
         scope.launch {
             while (isActive && !stoppedByUser) {
-                delay(4000)
-                if (!busy && !listening) restartListening(50, force = true)
+                delay(3000)
+                if (!busy && !listening) {
+                    updateNotification("Reconectando micrófono…")
+                    restartListening(50, force = true)
+                }
             }
         }
     }
@@ -56,15 +62,36 @@ class JaviWakeWordService : Service(), RecognitionListener {
             stopSelf()
             return START_NOT_STICKY
         }
+
         stoppedByUser = false
         JaviConfig.setWakeEnabled(this, true)
+        acquireWakeLock()
         if (!busy && !listening) restartListening(100, force = true)
         return START_STICKY
     }
 
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(PowerManager::class.java)
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "JAVI:BackgroundListening").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
     private fun createRecognizer() {
         try { recognizer?.destroy() } catch (_: Exception) {}
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this).also { it.setRecognitionListener(this) }
+
+        recognizer = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+            } else {
+                SpeechRecognizer.createSpeechRecognizer(this)
+            }
+        } catch (_: Exception) {
+            SpeechRecognizer.createSpeechRecognizer(this)
+        }.also { it.setRecognitionListener(this) }
+
         listening = false
     }
 
@@ -89,10 +116,11 @@ class JaviWakeWordService : Service(), RecognitionListener {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "es-DO")
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 })
-                listening = true
             } catch (_: Exception) {
                 listening = false
+                updateNotification("Reconectando micrófono…")
                 recreateAndRestart(900)
             }
         }
@@ -122,6 +150,7 @@ class JaviWakeWordService : Service(), RecognitionListener {
         }
 
         busy = true
+        updateNotification("Ejecutando: $commandText")
         try { recognizer?.cancel() } catch (_: Exception) {}
 
         scope.launch {
@@ -168,6 +197,7 @@ class JaviWakeWordService : Service(), RecognitionListener {
                 }
             } catch (_: Exception) {
                 busy = false
+                updateNotification("Reconectando micrófono…")
                 restartListening(250, force = true)
             }
         }
@@ -230,12 +260,20 @@ class JaviWakeWordService : Service(), RecognitionListener {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("J.A.V.I. Assistant Mode")
+            .setContentTitle("J.A.V.I. · segundo plano")
             .setContentText(text)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(openIntent)
             .addAction(0, "Detener", stopIntent)
             .build()
+    }
+
+    private fun updateNotification(text: String) {
+        try {
+            getSystemService(NotificationManager::class.java)
+                .notify(NOTIFICATION_ID, notification(text))
+        } catch (_: Exception) {}
     }
 
     private fun createChannel() {
@@ -243,7 +281,7 @@ class JaviWakeWordService : Service(), RecognitionListener {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
-                    "J.A.V.I. Assistant Mode",
+                    "J.A.V.I. segundo plano",
                     NotificationManager.IMPORTANCE_LOW
                 )
             )
@@ -271,6 +309,7 @@ class JaviWakeWordService : Service(), RecognitionListener {
         if (stoppedByUser || busy) return
 
         consecutiveErrors++
+        updateNotification("Reconectando micrófono…")
         when {
             error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> recreateAndRestart(700)
             error == SpeechRecognizer.ERROR_CLIENT -> recreateAndRestart(700)
@@ -285,10 +324,13 @@ class JaviWakeWordService : Service(), RecognitionListener {
 
     override fun onReadyForSpeech(params: Bundle?) {
         listening = true
+        consecutiveErrors = 0
+        updateNotification("Escuchando · di “Javi…”")
     }
 
     override fun onBeginningOfSpeech() {
         listening = true
+        updateNotification("Te estoy oyendo…")
     }
 
     override fun onRmsChanged(rmsdB: Float) {}
@@ -315,6 +357,7 @@ class JaviWakeWordService : Service(), RecognitionListener {
         scope.cancel()
         try { recognizer?.cancel() } catch (_: Exception) {}
         try { recognizer?.destroy() } catch (_: Exception) {}
+        try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
         tts?.shutdown()
         super.onDestroy()
     }
