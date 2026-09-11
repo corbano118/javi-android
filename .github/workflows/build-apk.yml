@@ -1,15 +1,18 @@
-name: Build JAVI Android
+name: Build A&M Sports Android
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [am-sports-public]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    defaults:
+      run:
+        working-directory: am-sports
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,21 +29,13 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Build APK
+      - name: Build installable APK
         run: gradle assembleDebug --stacktrace
-      - name: Validate release bundle
-        run: gradle bundleRelease --stacktrace
-      - name: Package outputs
-        run: |
-          cp app/build/outputs/apk/debug/app-debug.apk JAVI-Assistant-v0.16.1.apk
-          cp app/build/outputs/bundle/release/app-release.aab JAVI-Assistant-v0.16.1-release.aab
-          git archive --format=zip --output=JAVI-Assistant-v0.16.1-source.zip HEAD
-      - name: Upload Android package
+      - name: Package APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk AM-Sports-v1.0.0.apk
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: JAVI-Assistant-v0.16.1-transport-fix
-          path: |
-            JAVI-Assistant-v0.16.1.apk
-            JAVI-Assistant-v0.16.1-release.aab
-            JAVI-Assistant-v0.16.1-source.zip
+          name: AM-Sports-v1.0.0
+          path: am-sports/AM-Sports-v1.0.0.apk
           if-no-files-found: error
